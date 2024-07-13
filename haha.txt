@@ -1,0 +1,69 @@
+from flask import Flask, request, jsonify
+from pydub import AudioSegment
+import os
+import tempfile
+import librosa
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+
+app = Flask(__name__)
+
+cache_dir = "models/cache"
+processor = WhisperProcessor.from_pretrained("tarteel-ai/whisper-base-ar-quran", cache_dir=cache_dir)
+model = WhisperForConditionalGeneration.from_pretrained("tarteel-ai/whisper-base-ar-quran", cache_dir=cache_dir)
+model.config.forced_decoder_ids = None
+
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+def transcribe_audio(audio_data, sampling_rate):
+    input_features = processor(audio_data, sampling_rate=sampling_rate, return_tensors="pt").input_features
+    predicted_ids = model.generate(input_features)
+    transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]  # Ambil transkripsi pertama
+    return transcription
+
+def convert_m4a_to_mp3(input_path, output_path):
+    audio = AudioSegment.from_file(input_path, format="m4a")
+    audio.export(output_path, format="mp3")
+
+def segment_phonemes(transcription):
+    # Pisahkan transkripsi menjadi fonem-fonem
+    # Di sini Anda bisa menggunakan pustaka atau metode lain untuk melakukan segmentasi fonem
+    # Contoh sederhana: pisahkan teks dengan spasi
+    phonemes = transcription.split()
+    return phonemes
+
+@app.route('/', methods=['POST'])
+def index():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'})
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'})
+
+    # Simpan file audio yang diunggah secara sementara
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as temp_audio_file:
+        temp_audio_file_path = temp_audio_file.name
+        file.save(temp_audio_file_path)
+
+        # Konversi file M4A ke MP3 jika diperlukan
+        mp3_output_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_output.mp3')
+        convert_m4a_to_mp3(temp_audio_file_path, mp3_output_path)
+
+        # Baca file audio
+        audio_data, sampling_rate = librosa.load(mp3_output_path, sr=16000, mono=True)
+        
+        # Transkripsi audio
+        transcription = transcribe_audio(audio_data, sampling_rate)
+
+        # Segmentasi fonem
+        phonemes = segment_phonemes(transcription)
+
+        # Hapus file audio sementara setelah pemrosesan
+        temp_audio_file.close()
+        os.remove(temp_audio_file_path)
+
+        # Kembalikan fonem-fonem sebagai respons JSON
+        return jsonify({'fonems': phonemes, 'words': transcription})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
