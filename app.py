@@ -8,6 +8,12 @@ import mysql.connector
 import json
 from scipy.io.wavfile import write
 from noisereduce import reduce_noise
+from materi import fetch_materi_by_id
+from materi import insert_materi
+from materi import delete_materi
+from materi import update_materi
+from materi import get_current_materi
+
 app = Flask(__name__)
 
 # Konfigurasi koneksi ke database MySQL
@@ -36,23 +42,26 @@ def convert_m4a_to_mp3(input_path, output_path):
     audio.export(output_path, format="mp3")
 
 def segment_phonemes(transcription):
-    # Pisahkan transkripsi menjadi fonem-fonem
-    # Di sini Anda bisa menggunakan pustaka atau metode lain untuk melakukan segmentasi fonem
-    # Contoh sederhana: pisahkan teks dengan spasi
+
     phonemes = transcription.split()
     return phonemes
 def clean_phoneme_list(phoneme_list):
-    # Bersihkan elemen dalam daftar dari karakter tambahan
+   
     return [phoneme.strip("[] ,") for phoneme in phoneme_list]
 
 @app.route('/getmateri', methods=['GET'])
-
 def get_materi():
-    # Ambil data dari tabel materi
     materi = get_materi_from_db()
-
-    # Kembalikan data sebagai respons JSON
     return jsonify(materi)
+
+@app.route('/get_materi_id/<int:materi_id>', methods=['GET'])
+def get_materi_id(materi_id):
+    materi = fetch_materi_by_id(materi_id)
+    if materi:
+        return jsonify(materi)
+    else:
+        return jsonify({'error': 'Materi not found'}), 404
+
 @app.route('/get_audio/<path:filename>', methods=['GET'])
 def get_audio(filename):
     audio_directory = 'uploads'
@@ -62,7 +71,80 @@ def get_audio(filename):
     else:
         app.logger.error(f"File not found: {audio_path}")
         return "File not found", 404
-    
+@app.route('/update_materi', methods=['PUT'])
+def update_materi_route():
+    data = request.form  # Get form data
+    file = request.files.get('audio')  # Get uploaded audio file
+
+    if 'id' not in data:
+        return jsonify({'error': 'Invalid input'}), 400
+
+    materi_id = data['id']
+
+    # Retrieve the current data from the database
+    current_data = get_current_materi(materi_id)
+
+    # Prepare the data for updating
+    materi_data = {
+        "id": materi_id,
+        "audio": file.filename if file else current_data['audio'],
+        "contoh_soal": data.getlist('contoh_soal') if 'contoh_soal' in data else current_data['contoh_soal'],
+        "jenis_kuis": data.get('jenis_kuis') if 'jenis_kuis' in data else current_data['jenis_kuis'],
+        "judul": data.get('judul') if 'judul' in data else current_data['judul'],
+        "kategori": data.get('kategori') if 'kategori' in data else current_data['kategori'],
+        "materi": data.get('materi') if 'materi' in data else current_data['materi'],
+    }
+
+    # Save the uploaded audio file
+    if file:
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], file.filename))
+
+    success = update_materi(materi_data)
+    if success:
+        return jsonify({'message': 'Materi updated successfully'}), 200
+    else:
+        return jsonify({'error': 'Failed to update materi'}), 500
+
+@app.route('/add_materi', methods=['POST'])
+def add_materi_route():
+    data = request.form  # Get form data
+    file = request.files.get('audio')  # Get uploaded audio file
+
+    # Validate required fields
+    if 'jenis_kuis' not in data or 'judul' not in data or 'materi' not in data:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    # Prepare the data for insertion
+    materi_data = {
+        "jenis_kuis": data['jenis_kuis'],
+        "kategori": data.get('kategori'),
+        "judul": data['judul'],
+        "materi": data['materi'],
+        "audio": file.filename if file else None,
+        "contoh_soal": data.getlist('contoh_soal')
+    }
+
+    # Save the uploaded audio file if provided
+    if file:
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], file.filename))
+
+    # Insert the new record into the database
+    success = insert_materi(materi_data)
+    if success:
+        return jsonify({'message': 'Materi added successfully'}), 201
+    else:
+        return jsonify({'error': 'Failed to add materi'}), 500
+
+
+@app.route('/delete_materi/<int:materi_id>', methods=['DELETE'])
+def delete_materi_route(materi_id):
+    success = delete_materi(materi_id)
+    if success:
+        return jsonify({'message': 'Materi deleted successfully'}), 200
+    else:
+        return jsonify({'error': 'Failed to delete materi or materi not found'}), 404
+
+
 #TODO Fungsi untuk mengambil data materi berdasarkan device_pengguna
 @app.route('/get_materi_by_device_pengguna/<device_pengguna>', methods=['GET'])
 def get_materi_by_device_pengguna(device_pengguna):
@@ -156,7 +238,7 @@ def validate_device_pengguna(device_pengguna):
         return True  # Secara default, anggap validasi gagal jika terjadi kesalahan
 
 # strore data pengguna 
-# Endpoint POST untuk menyimpan data pengguna dan materi ke tabel pengguna dalam satu transaksi
+
 @app.route('/store_pengguna', methods=['POST'])
 def store_pengguna():
     data = request.get_json()
